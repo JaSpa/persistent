@@ -18,7 +18,7 @@ import qualified Data.ByteString.Base64 as B64
 import qualified Data.Vector as V
 import Control.Arrow (second)
 import Control.Applicative as A ((<$>))
-import Data.Time (Day, TimeOfDay, UTCTime)
+import Data.Time (Day, LocalTime, TimeOfDay, UTCTime)
 import Data.Int (Int64)
 import Data.ByteString (ByteString, foldl')
 import Data.Bits (shiftL, shiftR)
@@ -289,6 +289,7 @@ data PersistValue = PersistText Text
                   | PersistDay Day
                   | PersistTimeOfDay TimeOfDay
                   | PersistUTCTime UTCTime
+                  | PersistLocalTime LocalTime
                   | PersistNull
                   | PersistList [PersistValue]
                   | PersistMap [(Text, PersistValue)]
@@ -352,6 +353,7 @@ fromPersistValueText (PersistRational r) = Right $ T.pack $ show r
 fromPersistValueText (PersistDay d) = Right $ T.pack $ show d
 fromPersistValueText (PersistTimeOfDay d) = Right $ T.pack $ show d
 fromPersistValueText (PersistUTCTime d) = Right $ T.pack $ show d
+fromPersistValueText (PersistLocalTime d) = Right $ T.pack $ show d
 fromPersistValueText PersistNull = Left "Unexpected null"
 fromPersistValueText (PersistBool b) = Right $ T.pack $ show b
 fromPersistValueText (PersistList _) = Left "Cannot convert PersistList to Text"
@@ -374,6 +376,7 @@ instance A.ToJSON PersistValue where
     toJSON (PersistBool b) = A.Bool b
     toJSON (PersistTimeOfDay t) = A.String $ T.pack $ 't' : show t
     toJSON (PersistUTCTime u) = A.String $ T.pack $ 'u' : show u
+    toJSON (PersistLocalTime d) = A.String $ T.pack $ 'l' : show d
     toJSON (PersistDay d) = A.String $ T.pack $ 'd' : show d
     toJSON PersistNull = A.Null
     toJSON (PersistList l) = A.Array $ V.fromList $ map A.toJSON l
@@ -407,6 +410,7 @@ instance A.FromJSON PersistValue where
                            $ B64.decode $ TE.encodeUtf8 t
             Just ('t', t) -> fmap PersistTimeOfDay $ readMay t
             Just ('u', t) -> fmap PersistUTCTime $ readMay t
+            Just ('l', t) -> fmap PersistLocalTime $ readMay t
             Just ('d', t) -> fmap PersistDay $ readMay t
             Just ('r', t) -> fmap PersistRational $ readMay t
             Just ('o', t) -> maybe (fail "Invalid base64") (return . PersistObjectId) $

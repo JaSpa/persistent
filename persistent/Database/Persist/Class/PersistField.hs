@@ -16,7 +16,7 @@ module Database.Persist.Class.PersistField
 
 import Control.Arrow (second)
 import Database.Persist.Types.Base
-import Data.Time (Day(..), TimeOfDay, UTCTime,
+import Data.Time (Day(..), LocalTime, TimeOfDay, UTCTime,
 #if MIN_VERSION_time(1,5,0)
     parseTimeM)
 #else
@@ -128,6 +128,7 @@ instance PersistField [Char] where
     fromPersistValue (PersistDay d) = Right $ Prelude.show d
     fromPersistValue (PersistTimeOfDay d) = Right $ Prelude.show d
     fromPersistValue (PersistUTCTime d) = Right $ Prelude.show d
+    fromPersistValue (PersistLocalTime d) = Right $ Prelude.show d
     fromPersistValue PersistNull = Left $ T.pack "Unexpected null"
     fromPersistValue (PersistBool b) = Right $ Prelude.show b
     fromPersistValue (PersistList _) = Left $ T.pack "Cannot convert PersistList to String"
@@ -344,6 +345,11 @@ instance PersistField UTCTime where
             _ -> Left $ fromPersistValueParseError "UTCTime" x
 
     fromPersistValue x = Left $ fromPersistValueError "UTCTime" "time, integer, string, or bytestring" x
+
+instance PersistField LocalTime where
+  toPersistValue = PersistLocalTime
+  fromPersistValue (PersistLocalTime d) = Right d
+  fromPersistValue x = Left $ T.pack $ "Expected LocalTime, received: " ++ show x
 
 #if MIN_VERSION_base(4,8,0)
 instance PersistField Natural where
