@@ -1584,7 +1584,7 @@ instance Lift SqlType where
     lift SqlBool = [|SqlBool|]
     lift SqlDay = [|SqlDay|]
     lift SqlTime = [|SqlTime|]
-    lift SqlDayTime = [|SqlDayTime|]
+    lift (SqlDayTime b) = [|SqlDayTime b|]
     lift SqlBlob = [|SqlBlob|]
     lift (SqlOther a) = [|SqlOther a|]
 

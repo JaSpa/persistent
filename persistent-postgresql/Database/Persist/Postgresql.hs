@@ -822,7 +822,8 @@ getColumn getter tableName' [PersistText columnName, PersistText isNullable, Per
     getType "text"        = Right SqlString
     getType "date"        = Right SqlDay
     getType "bool"        = Right SqlBool
-    getType "timestamptz" = Right SqlDayTime
+    getType "timestamptz" = Right $ SqlDayTime True
+    getType "timestamp"   = Right $ SqlDayTime False
     getType "float4"      = Right SqlReal
     getType "float8"      = Right SqlReal
     getType "bytea"       = Right SqlBlob
@@ -890,7 +891,7 @@ findAlters defs _tablename col@(Column name isNull sqltype def _defConstraintNam
                     -- When converting from Persistent pre-2.0 databases, we
                     -- need to make sure that TIMESTAMP WITHOUT TIME ZONE is
                     -- treated as UTC.
-                    | sqltype == SqlDayTime && sqltype' == SqlOther "timestamp" =
+                    | sqltype == SqlDayTime True && sqltype' == SqlDayTime False =
                         [(name, ChangeType sqltype $ T.concat
                             [ " USING "
                             , escape name
@@ -939,7 +940,8 @@ showSqlType SqlReal = "DOUBLE PRECISION"
 showSqlType (SqlNumeric s prec) = T.concat [ "NUMERIC(", T.pack (show s), ",", T.pack (show prec), ")" ]
 showSqlType SqlDay = "DATE"
 showSqlType SqlTime = "TIME"
-showSqlType SqlDayTime = "TIMESTAMP WITH TIME ZONE"
+showSqlType (SqlDayTime True) = "TIMESTAMP WITH TIME ZONE"
+showSqlType (SqlDayTime False) = "TIMESTAMP WITHOUT TIME ZONE"
 showSqlType SqlBlob = "BYTEA"
 showSqlType SqlBool = "BOOLEAN"
 

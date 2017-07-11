@@ -320,7 +320,7 @@ instance PersistFieldSql Day where
 instance PersistFieldSql TimeOfDay where
     sqlType _ = SqlTime
 instance PersistFieldSql UTCTime where
-    sqlType _ = SqlDayTime
+    sqlType _ = SqlDayTime True
 #if MIN_VERSION_base(4,8,0)
 instance {-# OVERLAPPABLE #-} PersistFieldSql a => PersistFieldSql [a] where
 #else
