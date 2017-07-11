@@ -18,7 +18,7 @@ import qualified Data.ByteString.Base64 as B64
 import qualified Data.Vector as V
 import Control.Arrow (second)
 import Control.Applicative as A ((<$>))
-import Data.Time (Day, LocalTime, TimeOfDay, UTCTime)
+import Data.Time (Day, LocalTime, TimeOfDay, UTCTime, ZonedTime, zonedTimeToUTC)
 import Data.Int (Int64)
 import Data.ByteString (ByteString, foldl')
 import Data.Bits (shiftL, shiftR)
@@ -278,6 +278,21 @@ instance Exception PersistException
 instance Error PersistException where
     strMsg = PersistError . pack
 
+newtype ZonedTime' = ZonedTime' { getZonedTime :: ZonedTime }
+  deriving Typeable
+
+instance Eq ZonedTime' where
+  ZonedTime' a == ZonedTime' b = zonedTimeToUTC a == zonedTimeToUTC b
+
+instance Ord ZonedTime' where
+  ZonedTime' a `compare` ZonedTime' b = zonedTimeToUTC a `compare` zonedTimeToUTC b
+
+instance Show ZonedTime' where
+  show = show . getZonedTime
+
+instance Read ZonedTime' where
+  readsPrec = fmap (map $ \(a, s) -> (ZonedTime' a, s)) . readsPrec
+
 -- | A raw value which can be stored in any backend and can be marshalled to
 -- and from a 'PersistField'.
 data PersistValue = PersistText Text
@@ -290,6 +305,7 @@ data PersistValue = PersistText Text
                   | PersistTimeOfDay TimeOfDay
                   | PersistUTCTime UTCTime
                   | PersistLocalTime LocalTime
+                  | PersistZonedTime ZonedTime'
                   | PersistNull
                   | PersistList [PersistValue]
                   | PersistMap [(Text, PersistValue)]
@@ -354,6 +370,7 @@ fromPersistValueText (PersistDay d) = Right $ T.pack $ show d
 fromPersistValueText (PersistTimeOfDay d) = Right $ T.pack $ show d
 fromPersistValueText (PersistUTCTime d) = Right $ T.pack $ show d
 fromPersistValueText (PersistLocalTime d) = Right $ T.pack $ show d
+fromPersistValueText (PersistZonedTime d) = Right $ T.pack $ show d
 fromPersistValueText PersistNull = Left "Unexpected null"
 fromPersistValueText (PersistBool b) = Right $ T.pack $ show b
 fromPersistValueText (PersistList _) = Left "Cannot convert PersistList to Text"
@@ -377,6 +394,7 @@ instance A.ToJSON PersistValue where
     toJSON (PersistTimeOfDay t) = A.String $ T.pack $ 't' : show t
     toJSON (PersistUTCTime u) = A.String $ T.pack $ 'u' : show u
     toJSON (PersistLocalTime d) = A.String $ T.pack $ 'l' : show d
+    toJSON (PersistZonedTime d) = A.String $ T.pack $ 'z' : show d
     toJSON (PersistDay d) = A.String $ T.pack $ 'd' : show d
     toJSON PersistNull = A.Null
     toJSON (PersistList l) = A.Array $ V.fromList $ map A.toJSON l
@@ -411,6 +429,7 @@ instance A.FromJSON PersistValue where
             Just ('t', t) -> fmap PersistTimeOfDay $ readMay t
             Just ('u', t) -> fmap PersistUTCTime $ readMay t
             Just ('l', t) -> fmap PersistLocalTime $ readMay t
+            Just ('z', t) -> fmap PersistZonedTime $ readMay t
             Just ('d', t) -> fmap PersistDay $ readMay t
             Just ('r', t) -> fmap PersistRational $ readMay t
             Just ('o', t) -> maybe (fail "Invalid base64") (return . PersistObjectId) $

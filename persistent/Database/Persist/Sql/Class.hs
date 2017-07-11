@@ -31,7 +31,7 @@ import qualified Data.Text.Lazy as TL
 import qualified Data.Map as M
 import qualified Data.IntMap as IM
 import qualified Data.Set as S
-import Data.Time (UTCTime, TimeOfDay, Day)
+import Data.Time (UTCTime, LocalTime, TimeOfDay, Day, ZonedTime)
 import Data.Int
 import Data.Word
 import Data.ByteString (ByteString)
@@ -320,6 +320,10 @@ instance PersistFieldSql Day where
 instance PersistFieldSql TimeOfDay where
     sqlType _ = SqlTime
 instance PersistFieldSql UTCTime where
+    sqlType _ = SqlDayTime True
+instance PersistFieldSql LocalTime where
+    sqlType _ = SqlDayTime True
+instance PersistFieldSql ZonedTime where
     sqlType _ = SqlDayTime True
 #if MIN_VERSION_base(4,8,0)
 instance {-# OVERLAPPABLE #-} PersistFieldSql a => PersistFieldSql [a] where
