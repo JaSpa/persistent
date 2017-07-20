@@ -181,13 +181,15 @@ empty _          = False
 
 -- | A line.  We don't care about spaces in the middle of the
 -- line.  Also, we don't care about the ammount of indentation.
-data Line = Line { lineIndent :: Int
-                 , tokens     :: [Text]
-                 }
+data IndentedLine = Line { lineIndent :: Int
+                         , tokens     :: Line
+                         }
+
+type Line = [Text]
 
 -- | Remove leading spaces and remove spaces in the middle of the
 -- tokens.
-removeSpaces :: [[Token]] -> [Line]
+removeSpaces :: [[Token]] -> [IndentedLine]
 removeSpaces =
     map toLine
   where
@@ -200,7 +202,7 @@ removeSpaces =
     fromToken Spaces{}  = Nothing
 
 -- | Divide lines into blocks and make entity definitions.
-parseLines :: PersistSettings -> [Line] -> [EntityDef]
+parseLines :: PersistSettings -> [IndentedLine] -> [EntityDef]
 parseLines ps lines =
     fixForeignKeysAll $ toEnts lines
   where
@@ -283,16 +285,16 @@ data UnboundEntityDef = UnboundEntityDef
                         }
 
 
-lookupKeyVal :: Text -> [Text] -> Maybe Text
+lookupKeyVal :: Text -> Line -> Maybe Text
 lookupKeyVal key = lookupPrefix $ key `mappend` "="
-lookupPrefix :: Text -> [Text] -> Maybe Text
+lookupPrefix :: Text -> Line -> Maybe Text
 lookupPrefix prefix = msum . map (T.stripPrefix prefix)
 
 -- | Construct an entity definition.
 mkEntityDef :: PersistSettings
             -> Text -- ^ name
             -> [Attr] -- ^ entity attributes
-            -> [Line] -- ^ indented lines
+            -> [IndentedLine] -- ^ indented lines
             -> UnboundEntityDef
 mkEntityDef ps name entattribs lines =
   UnboundEntityDef foreigns $
@@ -367,7 +369,7 @@ keyConName :: Text -> Text
 keyConName entName = entName `mappend` "Id"
 
 
-splitExtras :: [Line] -> ([[Text]], M.Map Text [[Text]])
+splitExtras :: [IndentedLine] -> ([Line], M.Map Text [Line])
 splitExtras [] = ([], M.empty)
 splitExtras (Line indent [name]:rest)
     | not (T.null name) && isUpper (T.head name) =
@@ -378,10 +380,10 @@ splitExtras (Line _ ts:rest) =
     let (x, y) = splitExtras rest
      in (ts:x, y)
 
-takeColsEx :: PersistSettings -> [Text] -> Maybe FieldDef
+takeColsEx :: PersistSettings -> Line -> Maybe FieldDef
 takeColsEx = takeCols (\ft perr -> error $ "Invalid field type " ++ show ft ++ " " ++ perr)
 
-takeCols :: (Text -> String -> Maybe FieldDef) -> PersistSettings -> [Text] -> Maybe FieldDef
+takeCols :: (Text -> String -> Maybe FieldDef) -> PersistSettings -> Line -> Maybe FieldDef
 takeCols _ _ ("deriving":_) = Nothing
 takeCols onErr ps (n':typ:rest)
     | not (T.null n) && isLower (T.head n) =
@@ -403,14 +405,14 @@ takeCols onErr ps (n':typ:rest)
         | otherwise = (Nothing, n')
 takeCols _ _ _ = Nothing
 
-getDbName :: PersistSettings -> Text -> [Text] -> Text
+getDbName :: PersistSettings -> Text -> Line -> Text
 getDbName ps n [] = psToDBName ps n
 getDbName ps n (a:as) = fromMaybe (getDbName ps n as) $ T.stripPrefix "sql=" a
 
 takeConstraint :: PersistSettings
           -> Text
           -> [FieldDef]
-          -> [Text]
+          -> Line
           -> (Maybe FieldDef, Maybe CompositeDef, Maybe UniqueDef, Maybe UnboundForeignDef)
 takeConstraint ps tableName defs (n:rest) | not (T.null n) && isUpper (T.head n) = takeConstraint'
     where
@@ -424,7 +426,7 @@ takeConstraint _ _ _ _ = (Nothing, Nothing, Nothing, Nothing)
 
 -- TODO: this is hacky (the double takeCols, the setFieldDef stuff, and setIdName.
 -- need to re-work takeCols function
-takeId :: PersistSettings -> Text -> [Text] -> FieldDef
+takeId :: PersistSettings -> Text -> Line -> FieldDef
 takeId ps tableName (n:rest) = fromMaybe (error "takeId: impossible!") $ setFieldDef $
     takeCols (\_ _ -> addDefaultIdType) ps (field:rest `mappend` setIdName)
   where
@@ -446,7 +448,7 @@ takeId _ tableName _ = error $ "empty Id field for " `mappend` show tableName
 
 
 takeComposite :: [FieldDef]
-              -> [Text]
+              -> Line
               -> CompositeDef
 takeComposite fields pkcols
         = CompositeDef
@@ -467,10 +469,10 @@ takeComposite fields pkcols
 -- `UniqueTestNull fieldA fieldB sql=ConstraintNameInDatabase !force`
 -- Here using sql= sets the name of the constraint.
 takeUniq :: PersistSettings
-         -> Text
-         -> [FieldDef]
-         -> [Text]
-         -> UniqueDef
+          -> Text
+          -> [FieldDef]
+          -> Line
+          -> UniqueDef
 takeUniq ps tableName defs (n:rest)
     | not (T.null n) && isUpper (T.head n)
         = UniqueDef
@@ -521,7 +523,7 @@ data UnboundForeignDef = UnboundForeignDef
 takeForeign :: PersistSettings
           -> Text
           -> [FieldDef]
-          -> [Text]
+          -> Line
           -> UnboundForeignDef
 takeForeign ps tableName _defs (refTableName:n:rest)
     | not (T.null n) && isLower (T.head n)
@@ -538,11 +540,11 @@ takeForeign ps tableName _defs (refTableName:n:rest)
 
 takeForeign _ tableName _ xs = error $ "invalid foreign key constraint on table[" ++ show tableName ++ "] expecting a lower case constraint name xs=" ++ show xs
 
-takeDerives :: [Text] -> Maybe [Text]
+takeDerives :: Line -> Maybe [Text]
 takeDerives ("deriving":rest) = Just rest
 takeDerives _ = Nothing
 
-nullable :: [Text] -> IsNullable
+nullable :: Line -> IsNullable
 nullable s
     | "Maybe"    `elem` s = Nullable ByMaybeAttr
     | "nullable" `elem` s = Nullable ByNullableAttr
