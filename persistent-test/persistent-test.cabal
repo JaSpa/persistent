@@ -81,6 +81,7 @@ library
                      MigrationColumnLengthTest
                      EquivalentTypeTest
                      TransactionLevelTest
+                     ForeignActionsTest
 
     hs-source-dirs: src, test
 

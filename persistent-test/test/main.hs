@@ -8,6 +8,7 @@ import qualified DataTypeTest
 import qualified EmbedOrderTest
 import qualified EmbedTest
 import qualified EmptyEntityTest
+import qualified ForeignActionsTest
 import qualified HtmlTest
 import Init
 import qualified LargeNumberTest
@@ -86,6 +87,7 @@ main = do
       , CustomPrimaryKeyReferenceTest.migration
       , MigrationColumnLengthTest.migration
       , TransactionLevelTest.migration
+      , ForeignActionsTest.foreignActionsMigrate
       ]
     PersistentTest.cleanDB
 #endif
@@ -113,6 +115,7 @@ main = do
     MigrationColumnLengthTest.specs
     EquivalentTypeTest.specs
     TransactionLevelTest.specs
+    ForeignActionsTest.specs
 
 #ifdef WITH_SQLITE
     MigrationTest.specs
