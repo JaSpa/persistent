@@ -8,6 +8,8 @@ module Database.Persist.Quasi
     , upperCaseSettings
     , lowerCaseSettings
     , nullable
+    , getForeignActions
+    , getForeignAction
 #if TEST
     , Token (..)
     , tokenize
@@ -439,8 +441,9 @@ takeId ps tableName (n:rest) = fromMaybe (error "takeId: impossible!") $ setFiel
       let refFieldType = if fieldType fd == FTTypeCon Nothing keyCon
               then defaultReferenceTypeCon
               else fieldType fd
-      in fd { fieldReference = ForeignRef (HaskellName tableName) refFieldType
-                                          (ForeignActionClause NoAction NoAction)
+      in fd { fieldReference = ForeignRef (HaskellName tableName)
+                                          refFieldType
+                                          (getForeignActions (fieldAttrs fd))
             })
     keyCon = keyConName tableName
     -- this will be ignored if there is already an existing sql=
@@ -537,11 +540,23 @@ takeForeign ps tableName _defs (refTableName:n:rest)
             []
             attrs
             False
-            (ForeignActionClause NoAction NoAction)
+            (getForeignActions attrs)
   where
     (fields,attrs) = break ("!" `T.isPrefixOf`) rest
 
 takeForeign _ tableName _ xs = error $ "invalid foreign key constraint on table[" ++ show tableName ++ "] expecting a lower case constraint name xs=" ++ show xs
+
+getForeignActions :: [Attr] -> ForeignActionClause
+getForeignActions attrs = ForeignActionClause (f "on_update") (f "on_delete")
+  where f k = maybe NoAction getForeignAction $ lookupKeyVal k attrs
+
+getForeignAction :: Text -> ForeignAction
+getForeignAction a = case T.toUpper a of
+                       "RESTRICT"    -> Restrict
+                       "CASCADE"     -> Cascade
+                       "SET_NULL"    -> SetNull
+                       "SET_DEFAULT" -> SetDefault
+                       _             -> NoAction
 
 takeDerives :: Line -> Maybe [Text]
 takeDerives ("deriving":rest) = Just rest
