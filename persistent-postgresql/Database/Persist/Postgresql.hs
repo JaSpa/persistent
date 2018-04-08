@@ -82,7 +82,6 @@ import System.Environment (getEnvironment)
 import Data.Int (Int64)
 import Data.Monoid ((<>))
 import Data.Pool (Pool)
-import Data.Time (utc, localTimeToUTC)
 import Control.Exception (Exception, throwIO)
 
 -- | A @libpq@ connection string.  A simple example of connection
@@ -430,6 +429,7 @@ instance PGTF.ToField P where
     toField (P (PersistDay d))         = PGTF.toField d
     toField (P (PersistTimeOfDay t))   = PGTF.toField t
     toField (P (PersistUTCTime t))     = PGTF.toField t
+    toField (P (PersistLocalTime d))   = PGTF.toField d
     toField (P PersistNull)            = PGTF.toField PG.Null
     toField (P (PersistList l))        = PGTF.toField $ listToJSON l
     toField (P (PersistMap m))         = PGTF.toField $ mapToJSON m
@@ -476,7 +476,7 @@ builtinGetters = I.fromList
     , (k PS.varchar,     convertPV PersistText)
     , (k PS.date,        convertPV PersistDay)
     , (k PS.time,        convertPV PersistTimeOfDay)
-    , (k PS.timestamp,   convertPV (PersistUTCTime. localTimeToUTC utc))
+    , (k PS.timestamp,   convertPV PersistLocalTime)
     , (k PS.timestamptz, convertPV PersistUTCTime)
     , (k PS.bit,         convertPV (PersistDbSpecific . unUnknown))
     , (k PS.varbit,      convertPV (PersistDbSpecific . unUnknown))
@@ -506,7 +506,7 @@ builtinGetters = I.fromList
     , (1015,             listOf PersistText)
     , (1182,             listOf PersistDay)
     , (1183,             listOf PersistTimeOfDay)
-    , (1115,             listOf PersistUTCTime)
+    , (1115,             listOf PersistLocalTime)
     , (1185,             listOf PersistUTCTime)
     , (1561,             listOf (PersistDbSpecific . unUnknown))
     , (1563,             listOf (PersistDbSpecific . unUnknown))
