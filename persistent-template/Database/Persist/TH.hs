@@ -223,8 +223,8 @@ stripId _ = Nothing
 
 foreignReference :: FieldDef -> Maybe HaskellName
 foreignReference field = case fieldReference field of
-    ForeignRef ref _ -> Just ref
-    _              -> Nothing
+    ForeignRef ref _ _ -> Just ref
+    _                  -> Nothing
 
 
 -- fieldSqlType at parse time can be an Exp
@@ -265,10 +265,20 @@ instance Lift EntityDefSqlTypeExp where
 
 instance Lift ReferenceDef where
     lift NoReference = [|NoReference|]
-    lift (ForeignRef name ft) = [|ForeignRef name ft|]
+    lift (ForeignRef name ft actions) = [|ForeignRef name ft actions|]
     lift (EmbedRef em) = [|EmbedRef em|]
     lift (CompositeRef cdef) = [|CompositeRef cdef|]
     lift (SelfReference) = [|SelfReference|]
+
+instance Lift ForeignActionClause where
+    lift (ForeignActionClause upd del) = [|ForeignActionClause upd del|]
+
+instance Lift ForeignAction where
+    lift NoAction = [|NoAction|]
+    lift Restrict   = [|Restrict|]
+    lift Cascade    = [|Cascade|]
+    lift SetNull    = [|SetNull|]
+    lift SetDefault = [|SetDefault|]
 
 instance Lift EmbedEntityDef where
     lift (EmbedEntityDef name fields) = [|EmbedEntityDef name fields|]
@@ -305,6 +315,7 @@ setEmbedField entName allEntities field = field
                     Just _ -> ForeignRef (HaskellName name)
                                     -- This can get corrected in mkEntityDefSqlTypeExp
                                     (FTTypeCon (Just "Data.Int") "Int64")
+                                    (getForeignActions (fieldAttrs field))
             Right em -> if embeddedHaskell em /= entName
               then EmbedRef em
               else if maybeNullable field
@@ -333,7 +344,7 @@ mkEntityDefSqlTypeExp emEntities entMap ent = EntityDefSqlTypeExp ent
         Right _ -> SqlType' SqlString
         Left (Just FTKeyCon) -> SqlType' SqlString
         Left Nothing -> case fieldReference field of
-            ForeignRef refName ft  -> case M.lookup refName entMap of
+            ForeignRef refName ft _ -> case M.lookup refName entMap of
                 Nothing  -> SqlTypeExp ft
                 -- A ForeignRef is blindly set to an Int64 in setEmbedField
                 -- correct that now
@@ -1481,11 +1492,11 @@ liftAndFixKey entMap (FieldDef a b c sqlTyp e f fieldRef) =
   where
     (fieldRef', sqlTyp') = fromMaybe (fieldRef, lift sqlTyp) $
       case fieldRef of
-        ForeignRef refName _ft -> case M.lookup refName entMap of
+        ForeignRef refName _ft actions -> case M.lookup refName entMap of
           Nothing -> Nothing
           Just ent ->
             case fieldReference $ entityId ent of
-              fr@(ForeignRef _Name ft) -> Just (fr, lift $ SqlTypeExp ft)
+              (ForeignRef _ ft _) -> Just (ForeignRef refName ft actions, lift $ SqlTypeExp ft)
               _ -> Nothing
         _ -> Nothing
 
@@ -1510,7 +1521,7 @@ instance Lift UniqueDef where
 instance Lift CompositeDef where
     lift (CompositeDef a b) = [|CompositeDef a b|]
 instance Lift ForeignDef where
-    lift (ForeignDef a b c d e f g) = [|ForeignDef a b c d e f g|]
+    lift (ForeignDef a b c d e f g h) = [|ForeignDef a b c d e f g h|]
 
 -- | A hack to avoid orphans.
 class Lift' a where
