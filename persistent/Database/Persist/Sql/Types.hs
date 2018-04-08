@@ -39,7 +39,8 @@ data Column = Column
     , cDefault   :: !(Maybe Text)
     , cDefaultConstraintName   :: !(Maybe DBName)
     , cMaxLen    :: !(Maybe Integer)
-    , cReference :: !(Maybe (DBName, DBName)) -- table name, constraint name
+    , cReference :: !(Maybe (DBName, DBName, ForeignActionClause))
+      -- ^ table name, constraint name, action clause
     }
     deriving (Eq, Ord, Show)
 

@@ -55,15 +55,15 @@ mkColumns allDefs t =
     ref :: DBName
         -> ReferenceDef
         -> [Attr]
-        -> Maybe (DBName, DBName) -- table name, constraint name
+        -> Maybe (DBName, DBName, ForeignActionClause) -- table name, constraint name
     ref c fe []
-        | ForeignRef f _ <- fe =
-            Just (resolveTableName allDefs f, refName tn c)
+        | ForeignRef f _ action <- fe =
+          Just (resolveTableName allDefs f, refName tn c, action)
         | otherwise = Nothing
     ref _ _ ("noreference":_) = Nothing
     ref c _ (a:_)
         | Just x <- T.stripPrefix "reference=" a =
-            Just (DBName x, refName tn c)
+          Just (DBName x, refName tn c, ForeignActionClause NoAction NoAction)
     ref c x (_:as) = ref c x as
 
 refName :: DBName -> DBName -> DBName

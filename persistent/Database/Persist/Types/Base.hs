@@ -176,7 +176,7 @@ data FieldDef = FieldDef
 -- 2) single field
 -- 3) embedded
 data ReferenceDef = NoReference
-                  | ForeignRef !HaskellName !FieldType
+                  | ForeignRef !HaskellName !FieldType !ForeignActionClause
                     -- ^ A ForeignRef has a late binding to the EntityDef it references via HaskellName and has the Haskell type of the foreign key in the form of FieldType
                   | EmbedRef EmbedEntityDef
                   | CompositeRef CompositeDef
@@ -262,6 +262,7 @@ data ForeignDef = ForeignDef
     , foreignFields                :: ![(ForeignFieldDef, ForeignFieldDef)] -- this entity plus the primary entity
     , foreignAttrs                 :: ![Attr]
     , foreignNullable              :: Bool
+    , foreignActionClause          :: !ForeignActionClause
     }
     deriving (Show, Eq, Read, Ord)
 

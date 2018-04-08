@@ -357,7 +357,8 @@ mkAutoIdField ps entName idName idSqlType = FieldDef
       , fieldType = FTTypeCon Nothing $ keyConName $ unHaskellName entName
       , fieldSqlType = idSqlType
       -- the primary field is actually a reference to the entity
-      , fieldReference = ForeignRef entName  defaultReferenceTypeCon
+      , fieldReference = ForeignRef entName defaultReferenceTypeCon
+                                    (ForeignActionClause NoAction NoAction)
       , fieldAttrs = []
       , fieldStrict = True
       }
@@ -438,7 +439,8 @@ takeId ps tableName (n:rest) = fromMaybe (error "takeId: impossible!") $ setFiel
       let refFieldType = if fieldType fd == FTTypeCon Nothing keyCon
               then defaultReferenceTypeCon
               else fieldType fd
-      in fd { fieldReference = ForeignRef (HaskellName tableName) $ refFieldType
+      in fd { fieldReference = ForeignRef (HaskellName tableName) refFieldType
+                                          (ForeignActionClause NoAction NoAction)
             })
     keyCon = keyConName tableName
     -- this will be ignored if there is already an existing sql=
@@ -535,6 +537,7 @@ takeForeign ps tableName _defs (refTableName:n:rest)
             []
             attrs
             False
+            (ForeignActionClause NoAction NoAction)
   where
     (fields,attrs) = break ("!" `T.isPrefixOf`) rest
 
