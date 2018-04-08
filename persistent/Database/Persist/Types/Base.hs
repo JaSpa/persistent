@@ -265,6 +265,19 @@ data ForeignDef = ForeignDef
     }
     deriving (Show, Eq, Read, Ord)
 
+data ForeignActionClause = ForeignActionClause
+    { actionOnDelete :: !ForeignAction
+    , actionOnUpdate :: !ForeignAction
+    }
+    deriving (Show, Eq, Read, Ord)
+
+data ForeignAction = NoAction
+                   | Restrict
+                   | Cascade
+                   | SetNull
+                   | SetDefault
+                   deriving (Show, Eq, Read, Ord)
+
 data PersistException
   = PersistError Text -- ^ Generic Exception
   | PersistMarshalError Text
