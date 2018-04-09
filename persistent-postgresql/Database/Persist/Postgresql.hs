@@ -660,19 +660,16 @@ getColumns :: (Text -> IO Statement)
            -> EntityDef
            -> IO [Either Text (Either Column (DBName, [DBName]))]
 getColumns getter def = do
-    let sqlv=T.concat ["SELECT "
-                          ,"column_name "
-                          ,",is_nullable "
-                          ,",COALESCE(domain_name, udt_name)" -- See DOMAINS below
-                          ,",column_default "
-                          ,",numeric_precision "
-                          ,",numeric_scale "
-                          ,",character_maximum_length "
-                          ,"FROM information_schema.columns "
-                          ,"WHERE table_catalog=current_database() "
-                          ,"AND table_schema=current_schema() "
-                          ,"AND table_name=? "
-                          ,"AND column_name <> ?"]
+  let sqlv = T.concat [ "SELECT attname, attnotnull, "
+                      ,        "format_type(atttypid, atttypmod), "
+                      ,        "pg_get_expr(adbin, attrelid, TRUE) "
+                      ,   "FROM pg_attribute LEFT JOIN pg_attrdef "
+                      ,     "ON attrelid = adrelid AND attnum = adnum "
+                      ,  "WHERE attrelid = concat('\"', replace("
+                      ,     "current_schema(), '\"', '\"\"'), '\".\"', ?, '\"')"
+                      ,       "::regclass "
+                      ,    "AND attname != ? AND attnum > 0 AND NOT attisdropped"
+                      ]
 
 -- DOMAINS Postgres supports the concept of domains, which are data types with optional constraints.
 -- An app might make an "email" domain over the varchar type, with a CHECK that the emails are valid
@@ -680,32 +677,32 @@ getColumns getter def = do
 -- This code exists to use the domain name (email), instead of the underlying type (varchar).
 -- This is tested in EquivalentTypeTest.hs
 
-    stmt <- getter sqlv
-    let vals =
-            [ PersistText $ unDBName $ entityDB def
-            , PersistText $ unDBName $ fieldDB (entityId def)
-            ]
-    cs <- with (stmtQuery stmt vals) (\src -> runConduit $ src .| helper)
-    let sqlc = T.concat ["SELECT "
-                          ,"c.constraint_name, "
-                          ,"c.column_name "
-                          ,"FROM information_schema.key_column_usage c, "
-                          ,"information_schema.table_constraints k "
-                          ,"WHERE c.table_catalog=current_database() "
-                          ,"AND c.table_catalog=k.table_catalog "
-                          ,"AND c.table_schema=current_schema() "
-                          ,"AND c.table_schema=k.table_schema "
-                          ,"AND c.table_name=? "
-                          ,"AND c.table_name=k.table_name "
-                          ,"AND c.column_name <> ? "
-                          ,"AND c.constraint_name=k.constraint_name "
-                          ,"AND NOT k.constraint_type IN ('PRIMARY KEY', 'FOREIGN KEY') "
-                          ,"ORDER BY c.constraint_name, c.column_name"]
+  stmt <- getter sqlv
+  let vals =
+          [ PersistText $ unDBName $ entityDB def
+          , PersistText $ unDBName $ fieldDB (entityId def)
+          ]
+  cs <- with (stmtQuery stmt vals) (\src -> runConduit $ src .| helper)
+  let sqlc = T.concat ["SELECT "
+                        ,"c.constraint_name, "
+                        ,"c.column_name "
+                        ,"FROM information_schema.key_column_usage c, "
+                        ,"information_schema.table_constraints k "
+                        ,"WHERE c.table_catalog=current_database() "
+                        ,"AND c.table_catalog=k.table_catalog "
+                        ,"AND c.table_schema=current_schema() "
+                        ,"AND c.table_schema=k.table_schema "
+                        ,"AND c.table_name=? "
+                        ,"AND c.table_name=k.table_name "
+                        ,"AND c.column_name <> ? "
+                        ,"AND c.constraint_name=k.constraint_name "
+                        ,"AND NOT k.constraint_type IN ('PRIMARY KEY', 'FOREIGN KEY') "
+                        ,"ORDER BY c.constraint_name, c.column_name"]
 
-    stmt' <- getter sqlc
+  stmt' <- getter sqlc
 
-    us <- with (stmtQuery stmt' vals) (\src -> runConduit $ src .| helperU)
-    return $ cs ++ us
+  us <- with (stmtQuery stmt' vals) (\src -> runConduit $ src .| helperU)
+  return $ cs ++ us
   where
     getAll front = do
         x <- CL.head
@@ -772,27 +769,24 @@ getAlters defs def (c1, u1) (c2, u2) =
 getColumn :: (Text -> IO Statement)
           -> DBName -> [PersistValue]
           -> IO (Either Text Column)
-getColumn getter tableName' [PersistText columnName, PersistText isNullable, PersistText typeName, defaultValue, numericPrecision, numericScale, maxlen] =
-    case d' of
-        Left s -> return $ Left s
-        Right d'' ->
-            let typeStr = case maxlen of
-                            PersistInt64 n -> T.concat [typeName, "(", T.pack (show n), ")"]
-                            _              -> typeName
-             in case getType typeStr of
-                  Left s -> return $ Left s
-                  Right t -> do
-                      let cname = DBName columnName
-                      ref <- getRef cname
-                      return $ Right Column
-                          { cName = cname
-                          , cNull = isNullable == "YES"
-                          , cSqlType = t
-                          , cDefault = fmap stripSuffixes d''
-                          , cDefaultConstraintName = Nothing
-                          , cMaxLen = Nothing
-                          , cReference = ref
-                          }
+getColumn getter tableName'
+  [ PersistText columnName
+  , PersistBool isNullable
+  , PersistText typeName
+  , defaultValue
+  ] = case defaultValue' of
+        Left err -> return (Left err)
+        Right d  ->
+          let cname = DBName columnName
+           in flip fmap (getRef cname) $ \ref ->
+                Right Column{ cName                  = cname
+                            , cNull                  = not isNullable
+                            , cSqlType               = getType typeName
+                            , cDefault               = fmap stripSuffixes d
+                            , cDefaultConstraintName = Nothing
+                            , cReference             = ref
+                            , cMaxLen                = Nothing
+                            }
   where
     stripSuffixes t =
         loop'
@@ -805,6 +799,7 @@ getColumn getter tableName' [PersistText columnName, PersistText isNullable, Per
             case T.stripSuffix p t of
                 Nothing -> loop' ps
                 Just t' -> t'
+
     getRef cname = do
         let sql = T.concat
                 [ "SELECT update_rule,delete_rule FROM "
@@ -821,51 +816,32 @@ getColumn getter tableName' [PersistText columnName, PersistText isNullable, Per
                      [ PersistText $ unDBName tableName'
                      , PersistText $ unDBName ref
                      ]) (\src -> runConduit $ src .| (fmap (getRef' ref =<<) CL.head))
+
     getRef' ref [PersistText upd, PersistText del] =
       Just (DBName "", ref, ForeignActionClause (getForeignAction upd) (getForeignAction del))
     getRef' _ _ = Nothing
-    d' = case defaultValue of
+
+    defaultValue' = case defaultValue of
             PersistNull   -> Right Nothing
             PersistText t -> Right $ Just t
             _ -> Left $ T.pack $ "Invalid default column: " ++ show defaultValue
-    getType "int4"        = Right SqlInt32
-    getType "int8"        = Right SqlInt64
-    getType "varchar"     = Right SqlString
-    getType "text"        = Right SqlString
-    getType "date"        = Right SqlDay
-    getType "bool"        = Right SqlBool
-    getType "timestamptz" = Right $ SqlDayTime True
-    getType "timestamp"   = Right $ SqlDayTime False
-    getType "float4"      = Right SqlReal
-    getType "float8"      = Right SqlReal
-    getType "bytea"       = Right SqlBlob
-    getType "time"        = Right SqlTime
-    getType "numeric"     = getNumeric numericPrecision numericScale
-    getType a             = Right $ SqlOther a
 
-    getNumeric (PersistInt64 a) (PersistInt64 b) = Right $ SqlNumeric (fromIntegral a) (fromIntegral b)
-    getNumeric PersistNull PersistNull = Left $ T.concat
-      [ "No precision and scale were specified for the column: "
-      , columnName
-      , " in table: "
-      , unDBName tableName'
-      , ". Postgres defaults to a maximum scale of 147,455 and precision of 16383,"
-      , " which is probably not what you intended."
-      , " Specify the values as numeric(total_digits, digits_after_decimal_place)."
-      ]
-    getNumeric a b = Left $ T.concat
-      [ "Can not get numeric field precision for the column: "
-      , columnName
-      , " in table: "
-      , unDBName tableName'
-      , ". Expected an integer for both precision and scale, "
-      , "got: "
-      , T.pack $ show a
-      , " and "
-      , T.pack $ show b
-      , ", respectively."
-      , " Specify the values as numeric(total_digits, digits_after_decimal_place)."
-      ]
+    getType "integer"                     = SqlInt32
+    getType "bigint"                      = SqlInt64
+    getType "character varying"           = SqlString
+    getType "text"                        = SqlString
+    getType "date"                        = SqlDay
+    getType "boolean"                     = SqlBool
+    getType "timestamp with time zone"    = SqlDayTime True
+    getType "timestamp without time zone" = SqlDayTime False
+    getType "real"                        = SqlReal
+    getType "double precision"            = SqlReal
+    getType "bytea"                       = SqlBlob
+    getType "time without time zone"      = SqlTime
+    getType a = case reads . T.unpack <$> T.stripPrefix "numeric" a of
+                  Just [(p, "")] -> uncurry SqlNumeric p
+                  _              -> SqlOther a
+
 getColumn _ _ columnName =
     return $ Left $ T.pack $ "Invalid result from information_schema: " ++ show columnName
 
@@ -951,13 +927,13 @@ showColumn (Column n nu sqlType' def _defConstraintName _maxLen _ref) = T.concat
     ]
 
 showSqlType :: SqlType -> Text
-showSqlType SqlString = "VARCHAR"
-showSqlType SqlInt32 = "INT4"
-showSqlType SqlInt64 = "INT8"
+showSqlType SqlString = "CHARACTER VARYING"
+showSqlType SqlInt32 = "INTEGER"
+showSqlType SqlInt64 = "BIGINT"
 showSqlType SqlReal = "DOUBLE PRECISION"
 showSqlType (SqlNumeric s prec) = T.concat [ "NUMERIC(", T.pack (show s), ",", T.pack (show prec), ")" ]
 showSqlType SqlDay = "DATE"
-showSqlType SqlTime = "TIME"
+showSqlType SqlTime = "TIME WITHOUT TIME ZONE"
 showSqlType (SqlDayTime True) = "TIMESTAMP WITH TIME ZONE"
 showSqlType (SqlDayTime False) = "TIMESTAMP WITHOUT TIME ZONE"
 showSqlType SqlBlob = "BYTEA"

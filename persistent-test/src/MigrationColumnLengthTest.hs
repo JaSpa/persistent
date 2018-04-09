@@ -22,7 +22,7 @@ VaryingLengths
 
 specs :: Spec
 specs = describe "Migration" $ do
-#ifdef WITH_NOSQL
+#if defined(WITH_NOSQL) || defined(WITH_POSTGRESQL)
     return ()
 #else
   it "is idempotent" $ db $ do
