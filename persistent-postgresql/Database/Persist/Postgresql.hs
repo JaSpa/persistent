@@ -10,6 +10,7 @@
 {-# LANGUAGE ViewPatterns #-}
 {-# LANGUAGE Rank2Types #-}
 {-# LANGUAGE DeriveDataTypeable #-}
+{-# LANGUAGE LambdaCase #-}
 
 -- | A postgresql backend for persistent.
 module Database.Persist.Postgresql
@@ -254,7 +255,7 @@ createBackend logFunc serverVersion smap conn = do
         , connUpsertSql  = serverVersion >>= upsertFunction upsertSql'
         , connPutManySql = serverVersion >>= upsertFunction putManySql
         , connClose      = PG.close conn
-        , connMigrateSql = migrate'
+        , connMigrateSql = migrate' True
         , connBegin      = \_ mIsolation -> case mIsolation of
               Nothing -> PG.begin conn
               Just iso -> PG.beginLevel (case iso of
@@ -554,48 +555,49 @@ doesTableExist getter (DBName name) = do
     start' res = error $ "doesTableExist returned unexpected result: " ++ show res
     finish x = await >>= maybe (return x) (error "Too many rows returned in doesTableExist")
 
-migrate' :: [EntityDef]
+migrate' :: Bool        -- ^ If @False@ do a mock migration.
+         -> [EntityDef]
          -> (Text -> IO Statement)
          -> EntityDef
          -> IO (Either [Text] [(Bool, Text)])
-migrate' allDefs getter entity = fmap (fmap $ map showAlterDb) $ do
-    old <- getColumns getter entity
-    case partitionEithers old of
-        ([], old'') -> do
-            exists <-
-                if null old
-                    then doesTableExist getter name
-                    else return True
-            return $ Right $ migrationText exists old''
-        (errs, _) -> return $ Left errs
+migrate' trueMigrate allDefs getter entity = fmap (fmap $ map showAlterDb) $ do
+  if not trueMigrate
+     then createText
+     else doesTableExist getter name >>=
+       \case False -> createText
+             True  -> flip fmap (getColumns getter entity) $ \old' ->
+               case partitionEithers old' of
+                 ([], old) -> Right (migrationText old)
+                 (errs, _) -> Left errs
   where
     name = entityDB entity
-    migrationText exists old'' =
-        if not exists
-            then createText newcols fdefs udspair
-            else let (acs, ats) = getAlters allDefs entity (newcols, udspair) old'
-                     acs' = map (AlterColumn name) acs
-                     ats' = map (AlterTable name) ats
-                 in  acs' ++ ats'
-       where
-         old' = partitionEithers old''
-         (newcols', udefs, fdefs) = mkColumns allDefs entity
-         newcols = filter (not . safeToRemove entity . cName) newcols'
-         udspair = map udToPair udefs
-            -- Check for table existence if there are no columns, workaround
-            -- for https://github.com/yesodweb/persistent/issues/152
 
-    createText newcols fdefs udspair =
+    (newcols, udefs, fdefs) =
+        let (a, b, c) = mkColumns allDefs entity
+         in (filter (not . safeToRemove entity . cName) a, map udToPair b, c)
+
+    migrationText old =
+        let old' = partitionEithers old
+            (acs, ats) = getAlters allDefs entity (newcols, udefs) old'
+         in map (AlterColumn name) acs ++ map (AlterTable name) ats
+
+    createText = return $ Right $
         (addTable newcols entity) : uniques ++ references ++ foreignsAlt
       where
-        uniques = flip concatMap udspair $ \(uname, ucols) ->
-                [AlterTable name $ AddUniqueConstraint uname ucols]
-        references = mapMaybe (\c@Column { cName=cname, cReference=Just (refTblName, _, _) } ->
-            getAddReference allDefs name refTblName cname (cReference c))
-                   $ filter (isJust . cReference) newcols
+        uniques = flip concatMap udefs $ \(uname, ucols) ->
+          [AlterTable name $ AddUniqueConstraint uname ucols]
+        references =
+          [ getAddReference allDefs name refTblName (cName c) ref
+            | c <- newcols
+            , ref@(refTblName, _, _) <- maybeToList (cReference c)
+          ]
         foreignsAlt = flip map fdefs (\fdef ->
-            let (childfields, parentfields) = unzip (map (\((_,b),(_,d)) -> (b,d)) (foreignFields fdef))
-            in AlterColumn name (foreignRefTableDBName fdef, AddReference (foreignConstraintNameDBName fdef) childfields (map escape parentfields) (foreignActionClause fdef)))
+          let (childfields, parentfields) = unzip $ map (snd *** snd) (foreignFields fdef)
+              addRef = AddReference (foreignConstraintNameDBName fdef)
+                                    childfields
+                                    (map escape parentfields)
+                                    (foreignActionClause fdef)
+          in AlterColumn name (foreignRefTableDBName fdef, addRef))
 
 addTable :: [Column] -> EntityDef -> AlterDB
 addTable cols entity = AddTable $ T.concat
@@ -925,23 +927,16 @@ findAlters defs _tablename col@(Column name isNull sqltype def _defConstraintNam
                  filter (\c -> cName c /= name) cols)
 
 -- | Get the references to be added to a table for the given column.
-getAddReference :: [EntityDef]
+getAddReference :: [EntityDef]  -- ^ All entities
                 -> DBName       -- ^ Table name
                 -> DBName       -- ^ Referenced table
                 -> DBName       -- ^ Column name
-                -> Maybe (DBName, DBName, ForeignActionClause)
-                -> Maybe AlterDB
-getAddReference allDefs table reftable cname ref =
-    case ref of
-        Nothing -> Nothing
-        Just (s, _, a) -> Just $
-          AlterColumn table (s, AddReference (refName table cname) [cname] id_ a)
-            where
-              id_ = fromMaybe (error $ "Could not find ID of entity " ++ show reftable)
-                          $ do
-                            entDef <- find ((== reftable) . entityDB) allDefs
-                            return $ Util.dbIdColumnsEsc escape entDef
-
+                -> (DBName, DBName, ForeignActionClause)
+                -> AlterDB
+getAddReference allDefs table reftable cname (s, _, a) =
+    let id_ = fromMaybe (error $ "Unable to find ID of entity " ++ show reftable)
+                $ Util.dbIdColumnsEsc escape <$> find ((== reftable) . entityDB) allDefs
+    in AlterColumn table (s, AddReference (refName table cname) [cname] id_ a)
 
 showColumn :: Column -> Text
 showColumn (Column n nu sqlType' def _defConstraintName _maxLen _ref) = T.concat
@@ -1185,43 +1180,6 @@ refName (DBName table) (DBName column) =
 udToPair :: UniqueDef -> (DBName, [DBName])
 udToPair ud = (uniqueDBName ud, map snd $ uniqueFields ud)
 
-mockMigrate :: [EntityDef]
-         -> (Text -> IO Statement)
-         -> EntityDef
-         -> IO (Either [Text] [(Bool, Text)])
-mockMigrate allDefs _ entity = fmap (fmap $ map showAlterDb) $ do
-    case partitionEithers [] of
-        ([], old'') -> return $ Right $ migrationText False old''
-        (errs, _) -> return $ Left errs
-  where
-    name = entityDB entity
-    migrationText exists old'' =
-        if not exists
-            then createText newcols fdefs udspair
-            else let (acs, ats) = getAlters allDefs entity (newcols, udspair) old'
-                     acs' = map (AlterColumn name) acs
-                     ats' = map (AlterTable name) ats
-                 in  acs' ++ ats'
-       where
-         old' = partitionEithers old''
-         (newcols', udefs, fdefs) = mkColumns allDefs entity
-         newcols = filter (not . safeToRemove entity . cName) newcols'
-         udspair = map udToPair udefs
-            -- Check for table existence if there are no columns, workaround
-            -- for https://github.com/yesodweb/persistent/issues/152
-
-    createText newcols fdefs udspair =
-        (addTable newcols entity) : uniques ++ references ++ foreignsAlt
-      where
-        uniques = flip concatMap udspair $ \(uname, ucols) ->
-                [AlterTable name $ AddUniqueConstraint uname ucols]
-        references = mapMaybe (\c@Column { cName=cname, cReference=Just (refTblName, _, _) } ->
-            getAddReference allDefs name refTblName cname (cReference c))
-                   $ filter (isJust . cReference) newcols
-        foreignsAlt = flip map fdefs (\fdef ->
-            let (childfields, parentfields) = unzip (map (\((_,b),(_,d)) -> (b,d)) (foreignFields fdef))
-            in AlterColumn name (foreignRefTableDBName fdef, AddReference (foreignConstraintNameDBName fdef) childfields (map escape parentfields) (foreignActionClause fdef)))
-
 -- | Mock a migration even when the database is not present.
 -- This function performs the same functionality of 'printMigration'
 -- with the difference that an actual database is not needed.
@@ -1241,7 +1199,7 @@ mockMigration mig = do
                              connPutManySql = Nothing,
                              connStmtMap = smap,
                              connClose = undefined,
-                             connMigrateSql = mockMigrate,
+                             connMigrateSql = migrate' False,
                              connBegin = undefined,
                              connCommit = undefined,
                              connRollback = undefined,
