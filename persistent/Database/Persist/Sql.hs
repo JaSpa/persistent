@@ -10,6 +10,7 @@ module Database.Persist.Sql
     , rawExecute
     , rawExecuteCount
     , rawSql
+    , rawSqlSource
     , deleteWhereCount
     , updateWhereCount
     , transactionSave

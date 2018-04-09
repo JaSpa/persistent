@@ -2,6 +2,7 @@
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE FlexibleContexts #-}
 {-# LANGUAGE TypeFamilies #-}
+{-# LANGUAGE ScopedTypeVariables #-}
 module Database.Persist.Sql.Raw where
 
 import Database.Persist
@@ -145,19 +146,19 @@ getStmtConn conn sql = do
 --     deriving Show
 -- |]
 -- @
--- 
+--
 -- Examples based on the above schema:
--- 
--- @ 
+--
+-- @
 -- getPerson :: MonadIO m => ReaderT SqlBackend m [Entity Person]
 -- getPerson = rawSql "select ?? from person where name=?" [PersistText "john"]
--- 
+--
 -- getAge :: MonadIO m => ReaderT SqlBackend m [Single Int]
 -- getAge = rawSql "select person.age from person where name=?" [PersistText "john"]
--- 
+--
 -- getAgeName :: MonadIO m => ReaderT SqlBackend m [(Single Int, Single Text)]
 -- getAgeName = rawSql "select person.age, person.name from person where name=?" [PersistText "john"]
--- 
+--
 -- getPersonBlog :: MonadIO m => ReaderT SqlBackend m [(Entity Person, Entity BlogPost)]
 -- getPersonBlog = rawSql "select ??,?? from person,blog_post where person.id = blog_post.author_id" []
 -- @
@@ -173,7 +174,7 @@ getStmtConn conn sql = do
 -- > {-# LANGUAGE QuasiQuotes                #-}
 -- > {-# LANGUAGE TemplateHaskell            #-}
 -- > {-# LANGUAGE TypeFamilies               #-}
--- > 
+-- >
 -- > import           Control.Monad.IO.Class  (liftIO)
 -- > import           Control.Monad.Logger    (runStderrLoggingT)
 -- > import           Database.Persist
@@ -182,78 +183,83 @@ getStmtConn conn sql = do
 -- > import           Database.Persist.Sql
 -- > import           Database.Persist.Postgresql
 -- > import           Database.Persist.TH
--- > 
+-- >
 -- > share [mkPersist sqlSettings, mkMigrate "migrateAll"] [persistLowerCase|
 -- > Person
 -- >     name String
 -- >     age Int Maybe
 -- >     deriving Show
 -- > |]
--- > 
+-- >
 -- > conn = "host=localhost dbname=new_db user=postgres password=postgres port=5432"
--- > 
+-- >
 -- > getPerson :: MonadIO m => ReaderT SqlBackend m [Entity Person]
 -- > getPerson = rawSql "select ?? from person where name=?" [PersistText "sibi"]
--- > 
+-- >
 -- > liftSqlPersistMPool y x = liftIO (runSqlPersistMPool y x)
--- > 
+-- >
 -- > main :: IO ()
 -- > main = runStderrLoggingT $ withPostgresqlPool conn 10 $ liftSqlPersistMPool $ do
 -- >          runMigration migrateAll
 -- >          xs <- getPerson
 -- >          liftIO (print xs)
--- > 
+-- >
 
 rawSql :: (RawSql a, MonadIO m)
        => Text             -- ^ SQL statement, possibly with placeholders.
        -> [PersistValue]   -- ^ Values to fill the placeholders.
        -> ReaderT SqlBackend m [a]
-rawSql stmt = run
-    where
-      getType :: (x -> m [a]) -> a
-      getType = error "rawSql.getType"
+rawSql stmt params = do
+  srcRes <- liftPersist $ rawSqlSourceRes stmt params
+  liftIO $ with srcRes sourceToList
 
-      x = getType run
-      process = rawSqlProcessRow
+rawSqlSource :: (RawSql a, MonadResource m, MonadReader env m, IsSqlBackend env)
+             => Text            -- ^ SQL statement, possibly with placeholders.
+             -> [PersistValue]  -- ^ Values to fill the placeholders.
+             -> ConduitM () a m ()
+rawSqlSource stmt params = do
+  srcRes <- liftPersist $ rawSqlSourceRes stmt params
+  (releaseKey, src) <- allocateAcquire srcRes
+  src
+  release releaseKey
 
-      withStmt' colSubsts params sink = do
-            srcRes <- rawQueryRes sql params
-            liftIO $ with srcRes (\src -> runConduit $ src .| sink)
-          where
-            sql = T.concat $ makeSubsts colSubsts $ T.splitOn placeholder stmt
-            placeholder = "??"
-            makeSubsts (s:ss) (t:ts) = t : s : makeSubsts ss ts
-            makeSubsts []     []     = []
-            makeSubsts []     ts     = [T.intercalate placeholder ts]
-            makeSubsts ss     []     = error (concat err)
-                where
-                  err = [ "rawsql: there are still ", show (length ss)
-                        , "'??' placeholder substitutions to be made "
-                        , "but all '??' placeholders have already been "
-                        , "consumed.  Please read 'rawSql's documentation "
-                        , "on how '??' placeholders work."
-                        ]
+rawSqlSourceRes :: forall a m1 m2 env. (RawSql a, MonadIO m1, MonadIO m2, IsSqlBackend env)
+                => Text
+                -> [PersistValue]
+                -> ReaderT env m1 (Acquire (ConduitM () a m2 ()))
+rawSqlSourceRes stmt = run
+  where
+    a :: a
+    a = error "rawSql: dummy type annotation"
 
-      run params = do
-        conn <- ask
-        let (colCount, colSubsts) = rawSqlCols (connEscapeName conn) x
-        withStmt' colSubsts params $ firstRow colCount
+    run params = do
+      conn <- persistBackend `liftM` ask
+      let (colCount, colSubsts) = rawSqlCols (connEscapeName conn) a
+      srcRes <- liftPersist $ rawQueryRes (stmt' colSubsts) params
+      return $ fmap (.| process colCount) srcRes
 
-      firstRow colCount = do
-        mrow <- await
-        case mrow of
-          Nothing -> return []
-          Just row
-              | colCount == length row -> getter mrow
-              | otherwise              -> fail $ concat
-                  [ "rawSql: wrong number of columns, got "
-                  , show (length row), " but expected ", show colCount
-                  , " (", rawSqlColCountReason x, ")." ]
+    process :: Int -> ConduitM [PersistValue] a m2 ()
+    process colCount = do
+      mrow <- await
+      case mrow of
+        Nothing -> mempty
+        Just row
+          | colCount == length row -> process' row >> awaitForever process'
+          | otherwise -> fail $ concat
+             [ "rawSql: wrong number of columns (got ", show (length row)
+             , " but expected ", show colCount, ": ", rawSqlColCountReason a
+             , ")."
+             ]
+          where process' = either (fail . T.unpack) yield . rawSqlProcessRow
 
-      getter = go id
-          where
-            go acc Nothing = return (acc [])
-            go acc (Just row) =
-              case process row of
-                Left err -> fail (T.unpack err)
-                Right r  -> await >>= go (acc . (r:))
+    stmt' colSubsts = T.concat $ makeSubsts colSubsts (T.splitOn qs stmt)
+      where
+        qs = "??"
+        makeSubsts (s:ss) (t:tt) = t : s : makeSubsts ss tt
+        makeSubsts []     []     = []
+        makeSubsts []     tt     = [T.intercalate qs tt]
+        makeSubsts ss     []     = error $ concat
+          [ "rawSql: there are still ", show (length ss), " '??' placeholder "
+          , " substitutions to be made but all there are no more placeholders."
+          , " Plase read 'rawSql's documentation on how '??' placeholders work."
+          ]
