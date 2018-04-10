@@ -551,12 +551,13 @@ getForeignActions attrs = ForeignActionClause (f "on_update") (f "on_delete")
   where f k = maybe NoAction getForeignAction $ lookupKeyVal k attrs
 
 getForeignAction :: Text -> ForeignAction
-getForeignAction a = case T.toUpper a of
+getForeignAction a = case T.replace " " "_" (T.toUpper a) of
                        "RESTRICT"    -> Restrict
                        "CASCADE"     -> Cascade
                        "SET_NULL"    -> SetNull
                        "SET_DEFAULT" -> SetDefault
-                       _             -> NoAction
+                       "NO_ACTION"   -> NoAction
+                       _             -> error $ "invalid foreign action \"" ++ T.unpack a ++ "\""
 
 takeDerives :: Line -> Maybe [Text]
 takeDerives ("deriving":rest) = Just rest
